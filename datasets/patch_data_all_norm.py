@@ -1,0 +1,321 @@
+import torch, glob
+import numpy as np
+from osgeo import gdal
+from torch.utils.data import Dataset
+from utils import random_resize_torch
+from skimage.transform import resize
+from datasets.tiff_mat_conversion import tiff_to_mat_conversion
+from datasets.interpolator_tools import interp23tap
+from utils import random_crop_torch, random_flip, normalise_bandwise_20m, normalise_bandwise_RGB
+
+
+class TrainData(Dataset):
+    def __init__(self, pan_path, ms_path, s):
+        self.pan_path = pan_path
+        self.ms_path = ms_path
+        self.train_pan_imgs = glob.glob(pan_path + '*')
+        self.max_value = 2 ** s.nbits
+        self.s = s
+
+    def __getitem__(self, index):
+        pan_path = self.train_pan_imgs[index]
+        fl = pan_path.split('/')[-1]
+        n = len(fl.split('_'))
+        ms_path = glob.glob(self.ms_path + '*' + fl.split('_', n-2)[-1])[0]
+        temp = tiff_to_mat_conversion(ms_path, pan_path)
+        temp_ms = temp['I_MS_LR']/self.max_value   # Normalise
+        # Testing
+        temp_ms_cp = temp_ms.copy()
+        # temp_ms_cp = random_resize_torch(temp_ms, resize_scales=[1, 2])
+        
+        ms_patch = torch.from_numpy(temp_ms_cp)       # To torch convert
+        pan_patch = torch.from_numpy(temp['I_PAN']/self.max_value)
+        pan_patch = torch.unsqueeze(pan_patch, dim=0)
+        ms_patch_ups = interp23tap(np.moveaxis(temp_ms, 0, -1), self.s.ratio)
+        # print(ms_patch_ups.shape, np.moveaxis(ms_patch_ups, -1, 0).shape)
+        ms_patch_ups = torch.from_numpy(np.moveaxis(ms_patch_ups, -1, 0))
+        
+        return ms_patch[:3].float(), pan_patch[:3].float(), ms_patch_ups[:3].float()
+
+    def __len__(self):
+        return len(self.train_pan_imgs)
+
+
+def process_path(patch):
+    b57 = np.array(patch[4:7])
+    b8a = np.expand_dims(np.array(patch[8]), 0)
+    b = np.concatenate((b57, b8a), 0)
+    
+    b24 = np.array(patch[1:4])
+    b8 = np.expand_dims(np.array(patch[7]), 0)
+    b_rgb = np.concatenate((b24, b8), 0)
+    
+    return b[:,::2,::2], b_rgb[:3]
+
+
+def process_path(patch):
+    b = np.array(patch[4:])
+    b_rgb = np.array(patch[:4])
+    
+    return b[:,::2,::2], b_rgb[:]
+
+
+def process_path(patch):
+    return patch[4:,::2,::2], patch[:4]
+
+
+class TestData(Dataset):
+    def __init__(self, ms_path, s):
+        self.ms_path = ms_path
+        self.ms_files = glob.glob(self.ms_path + '/*')
+        self.max_value = 2 ** s.nbits
+        print(self.max_value)
+        self.s = s
+
+    def __getitem__(self, index):
+        ms_path = self.ms_files[index]
+        ms = gdal.Open(ms_path)
+        temp_ms = ms.ReadAsArray()
+        temp_ms, temp_ms_rgb = process_path(temp_ms)       # 64 x 64
+
+        temp_ms = temp_ms/self.max_value                   # Normalise
+        ms_patch = torch.from_numpy(temp_ms)               # To torch convert   32
+        temp_ms_rgb = temp_ms_rgb/self.max_value           # Normalise
+        ms_patch_rgb = torch.from_numpy(temp_ms_rgb)       # To torch convert   64
+        
+        # ms_patch, ms_patch_rgb = random_crop_torch(ms_patch, ms_patch_rgb, 64, 2)
+        
+        # ms_patch_ups = interp23tap(np.moveaxis(temp_ms, 0, -1), self.s.ratio)
+        # ms_patch_ups = torch.from_numpy(np.moveaxis(ms_patch_ups, -1, 0))
+        # print(ms_patch.shape, ms_patch_rgb.shape)
+        return ms_patch[:].float(), ms_patch_rgb[:].float()
+
+    def __len__(self):
+        return len(self.ms_files)
+    
+
+class TestData_TA(Dataset):
+    def __init__(self, ms_path, s):
+        self.ms_path = ms_path
+        self.ms_files = glob.glob(self.ms_path + '/*')
+        self.max_value = 2 ** s.nbits
+        self.s = s
+        self.scale = 4
+
+    def __getitem__(self, index):
+        ms_path = self.ms_files[index]
+        ms = gdal.Open(ms_path)
+        temp_ms = ms.ReadAsArray()
+        temp_ms, temp_ms_rgb = process_path(temp_ms)  # 32 x 32, 64 x 64    128/256
+        _, H, W = temp_ms.shape
+
+        temp_ms = temp_ms/self.max_value   # Normalise
+        ms_patch_ups = torch.from_numpy(temp_ms)       # To torch convert
+        temp_ms_rgb = temp_ms_rgb/self.max_value   # Normalise
+        ms_patch_rgb = resize(np.moveaxis(temp_ms_rgb, 0, -1), (H//2, W//2))
+        ms_patch_rgb = torch.from_numpy(np.moveaxis(ms_patch_rgb, -1, 0))       # To torch convert    
+        
+        ms_patch = resize(np.moveaxis(temp_ms, 0, -1), (H//self.scale, W//self.scale))  # 16 x 16   
+        ms_patch_bic = resize(ms_patch, (H, W))
+        ms_patch = torch.from_numpy(np.moveaxis(ms_patch, -1, 0))
+        ms_patch_bic = torch.from_numpy(np.moveaxis(ms_patch_bic, -1, 0))
+        return ms_patch[:].float(), ms_patch_rgb[:].float(), ms_patch_ups[:].float(), ms_patch_bic[:].float()
+
+    def __len__(self):
+        return len(self.ms_files)
+    
+
+class TestData_single(Dataset):
+    def __init__(self, ms_path, s, patch_size=512):
+        self.ms_path = ms_path
+        self.max_value = 2 ** s.nbits
+        # print(self.max_value)
+        self.s = s
+        self.ms_norms = []
+        self.ms_data = []
+        self.patch_size = patch_size
+        self.prefetch_data()
+        print(self.ms_norms)
+
+    def __getitem__(self, index):
+        temp_ms = torch.tensor(self.ms_data[index, :])
+        temp_ms, temp_ms_rgb = process_path(temp_ms)  # 32 x 32, 64 x 64    128/256
+        _, H, W = temp_ms.shape
+        # print(temp_ms.shape)
+        ms_patch = normalise_bandwise_20m(temp_ms, self.ms_norms)                  # Normalise
+        # print(temp_ms.shape, '2')
+        
+        # ms_patch = torch.from_numpy(temp_ms)               # To torch convert   32
+        ms_patch_rgb = normalise_bandwise_RGB(temp_ms_rgb, self.ms_norms)           # Normalise
+        # ms_patch_rgb = torch.from_numpy(temp_ms_rgb)       # To torch convert   64
+        
+        # ms_patch, ms_patch_rgb = random_crop_torch(ms_patch, ms_patch_rgb, 64, 2)
+        
+        # ms_patch_ups = interp23tap(np.moveaxis(temp_ms, 0, -1), self.s.ratio)
+        # ms_patch_ups = torch.from_numpy(np.moveaxis(ms_patch_ups, -1, 0))
+        # print(ms_patch.shape, ms_patch_rgb.shape)
+        return ms_patch[:].float(), ms_patch_rgb[:].float()
+
+    def prefetch_data(self):
+        ds = gdal.Open(self.ms_path)
+        arr = ds.ReadAsArray()
+        ds = None
+        for i in range(8):
+            i, j = np.percentile(arr[i], [1, 99])
+            self.ms_norms.append([max(0, i-100), j+200])
+        
+        _, n, m = arr.shape
+        for i in range((n//self.patch_size)+1):
+            for j in range((m//self.patch_size)+1):
+                strt_i = (i*self.patch_size)
+                end_i = ((i+1)*self.patch_size)
+                if i==(n//self.patch_size):
+                    strt_i = (i*self.patch_size) - (end_i - n)
+                    end_i = n
+                    
+                strt_j = (j*self.patch_size)
+                end_j = ((j+1)*self.patch_size)
+                if j==(m//self.patch_size):
+                    strt_j = (j*self.patch_size) - (end_j - m)
+                    end_j = m
+                self.ms_data.append(arr[:, strt_i:end_i, strt_j:end_j])
+        
+        self.ms_data = np.array(self.ms_data)
+    
+    def __len__(self):
+        return len(self.ms_data)    
+
+
+class TestData_TA_single(Dataset):
+    def __init__(self, ms_path, s, patch_size=512):
+        self.ms_path = ms_path
+        self.max_value = 2 ** s.nbits
+        self.s = s
+        self.scale = 4
+        self.ms_norms = []
+        self.ms_data = []
+        self.patch_size = patch_size
+        self.prefetch_data()
+        print(self.ms_norms)
+
+    def __getitem__(self, index):
+        temp_ms = torch.tensor(self.ms_data[index, :])
+        temp_ms, temp_ms_rgb = process_path(temp_ms)  # 32 x 32, 64 x 64    128/256
+        _, H, W = temp_ms.shape
+        
+        ms_patch_ups = normalise_bandwise_20m(temp_ms, self.ms_norms)   # Normalise
+        temp_ms = np.array(temp_ms)
+        # ms_patch_ups = torch.from_numpy(temp_ms)       # To torch convert
+        temp_ms_rgb = normalise_bandwise_RGB(temp_ms_rgb, self.ms_norms)   # Normalise
+        ms_patch_rgb = resize(np.moveaxis(np.array(temp_ms_rgb), 0, -1), (H//2, W//2))
+        ms_patch_rgb = torch.from_numpy(np.moveaxis(ms_patch_rgb, -1, 0))       # To torch convert 
+        ms_patch_rgb_up = resize(np.moveaxis(np.array(temp_ms_rgb), 0, -1), (H, W))
+        ms_patch_rgb_up = torch.from_numpy(np.moveaxis(ms_patch_rgb_up, -1, 0))       # To torch convert    
+        ms_patch_bic_rgb = resize(np.moveaxis(np.array(ms_patch_rgb), 0, -1), (H, W), order=2)
+        ms_patch_bic_rgb = torch.from_numpy(np.moveaxis(ms_patch_bic_rgb, -1, 0))
+        ms_patch_ups = torch.cat((ms_patch_rgb_up, ms_patch_ups), dim=0)
+        
+        ms_patch = resize(np.moveaxis(temp_ms, 0, -1), (H//self.scale, W//self.scale))  # 16 x 16   
+        ms_patch = torch.from_numpy(np.moveaxis(ms_patch, -1, 0))
+        ms_patch_bic = resize(np.moveaxis(np.array(ms_patch), 0, -1), (H, W))
+        ms_patch_bic = torch.from_numpy(np.moveaxis(ms_patch_bic, -1, 0))
+        ms_patch_bic = torch.cat((ms_patch_bic_rgb, ms_patch_bic), dim=0)
+        return ms_patch[:].float(), ms_patch_rgb[:].float(), ms_patch_ups[:].float(), ms_patch_bic[:].float()
+
+    def prefetch_data(self):
+        ds = gdal.Open(self.ms_path)
+        arr = ds.ReadAsArray()
+        ds = None
+        for i in range(8):
+            i, j = np.percentile(arr[i], [1, 99])
+            self.ms_norms.append([max(0, i-100), j+200])
+        
+        _, n, m = arr.shape
+        for i in range((n//self.patch_size)+1):
+            for j in range((m//self.patch_size)+1):
+                strt_i = (i*self.patch_size)
+                end_i = ((i+1)*self.patch_size)
+                if i==(n//self.patch_size):
+                    strt_i = (i*self.patch_size) - (end_i - n)
+                    end_i = n
+                    
+                strt_j = (j*self.patch_size)
+                end_j = ((j+1)*self.patch_size)
+                if j==(m//self.patch_size):
+                    strt_j = (j*self.patch_size) - (end_j - m)
+                    end_j = m
+                self.ms_data.append(arr[:, strt_i:end_i, strt_j:end_j])
+        
+        self.ms_data = np.array(self.ms_data)
+    
+    def __len__(self):
+        return len(self.ms_data)
+    
+
+class TestData_TA_single_RGB(Dataset):
+    def __init__(self, ms_path, s, patch_size=512):
+        self.ms_path = ms_path
+        self.max_value = 2 ** s.nbits
+        self.s = s
+        self.scale = 4
+        self.ms_norms = []
+        self.ms_data = []
+        self.patch_size = patch_size
+        self.prefetch_data()
+        print(self.ms_norms)
+
+    def __getitem__(self, index):
+        temp_ms = torch.tensor(self.ms_data[index, :])
+        temp_ms, temp_ms_rgb = process_path(temp_ms)  # 32 x 32, 64 x 64    128/256
+        _, H, W = temp_ms_rgb.shape
+        
+        ms_patch_ups = normalise_bandwise_20m(temp_ms, self.ms_norms)   # Normalise
+        temp_ms = np.array(temp_ms)
+        # ms_patch_ups = torch.from_numpy(temp_ms)       # To torch convert
+        temp_ms_rgb = normalise_bandwise_RGB(temp_ms_rgb, self.ms_norms)   # Normalise
+        ms_patch_rgb = resize(np.moveaxis(np.array(temp_ms_rgb), 0, -1), (H//2, W//2))
+        ms_patch_rgb = torch.from_numpy(np.moveaxis(ms_patch_rgb, -1, 0))       # To torch convert 
+        ms_patch_ups = resize(np.moveaxis(np.array(ms_patch_ups), 0, -1), (H, W))
+        ms_patch_ups = torch.from_numpy(np.moveaxis(ms_patch_ups, -1, 0))  
+        ms_patch_rgb_up = resize(np.moveaxis(np.array(temp_ms_rgb), 0, -1), (H, W))
+        ms_patch_rgb_up = torch.from_numpy(np.moveaxis(ms_patch_rgb_up, -1, 0))       # To torch convert    
+        ms_patch_bic_rgb = resize(np.moveaxis(np.array(ms_patch_rgb), 0, -1), (H, W), order=2)
+        ms_patch_bic_rgb = torch.from_numpy(np.moveaxis(ms_patch_bic_rgb, -1, 0))
+        ms_patch_ups = torch.cat((ms_patch_rgb_up, ms_patch_ups), dim=0)
+        
+        ms_patch = resize(np.moveaxis(temp_ms, 0, -1), (H//self.scale, W//self.scale))  # 16 x 16   
+        ms_patch = torch.from_numpy(np.moveaxis(ms_patch, -1, 0))
+        ms_patch_bic = resize(np.moveaxis(np.array(ms_patch), 0, -1), (H, W))
+        ms_patch_bic = torch.from_numpy(np.moveaxis(ms_patch_bic, -1, 0))
+        ms_patch_bic = torch.cat((ms_patch_bic_rgb, ms_patch_bic), dim=0)
+        return ms_patch[:].float(), ms_patch_rgb[:].float(), ms_patch_ups[:].float(), ms_patch_bic[:].float()
+
+    def prefetch_data(self):
+        ds = gdal.Open(self.ms_path)
+        arr = ds.ReadAsArray()
+        ds = None
+        for i in range(8):
+            i, j = np.percentile(arr[i], [1, 99])
+            self.ms_norms.append([max(0, i-100), j+200])
+        
+        _, n, m = arr.shape
+        for i in range((n//self.patch_size)+1):
+            for j in range((m//self.patch_size)+1):
+                strt_i = (i*self.patch_size)
+                end_i = ((i+1)*self.patch_size)
+                if i==(n//self.patch_size):
+                    strt_i = (i*self.patch_size) - (end_i - n)
+                    end_i = n
+                    
+                strt_j = (j*self.patch_size)
+                end_j = ((j+1)*self.patch_size)
+                if j==(m//self.patch_size):
+                    strt_j = (j*self.patch_size) - (end_j - m)
+                    end_j = m
+                self.ms_data.append(arr[:, strt_i:end_i, strt_j:end_j])
+        
+        self.ms_data = np.array(self.ms_data)
+    
+    def __len__(self):
+        return len(self.ms_data)
+    

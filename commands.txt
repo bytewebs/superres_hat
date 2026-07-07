@@ -1,0 +1,24 @@
+## -------------------- Working commands (Sep 15, 2023) -----------------------
+
+# SenGLEAN
+python infer_senglean.py --checkpoint_g "C:\Users\vsriniva\OneDrive\Forestry_Github_Code\UNB-GGE\SuperResolution\SenGLEAN\weights\gens_sen_glean.pt" --checkpoint_d "C:\Users\vsriniva\OneDrive\Forestry_Github_Code\UNB-GGE\SuperResolution\SenGLEAN\weights\discs_all.pt" --do_TA --data_path "C:\SceneSharp\UNB-GGE\SuperResolution\Ayush_Outputs_Fredericton\AOI1\Fred_AOI1_B2B3B4B8B5B6B7B8a_Orig.tif"
+python infer_senglean.py --checkpoint_g "C:\Users\vsriniva\OneDrive\Forestry_Github_Code\UNB-GGE\SuperResolution\SenGLEAN\weights\gens_sen_glean.pt" --checkpoint_d "C:\Users\vsriniva\OneDrive\Forestry_Github_Code\UNB-GGE\SuperResolution\SenGLEAN\weights\discs_all.pt" --do_TA --data_path "C:\SceneSharp\UNB-GGE\SuperResolution\Ayush_Outputs_Fredericton\AOI2\Fred_AOI2_B2B3B4B8B5B6B7B8a_Orig.tif"
+
+
+# LightSenGLEAN
+python infer_light_senglean.py --checkpoint_g "C:\Users\vsriniva\OneDrive\Forestry_Github_Code\UNB-GGE\SuperResolution\LightSenGLEAN\weights\gens_light_sen_glean.pt" --checkpoint_d "C:\Users\vsriniva\OneDrive\Forestry_Github_Code\UNB-GGE\SuperResolution\LightSenGLEAN\weights\discs_all.pt" --do_TA --data_path "C:\SceneSharp\UNB-GGE\SuperResolution\Ayush_Outputs_Fredericton\AOI1\Fred_AOI1_B2B3B4B8B5B6B7B8a_Orig.tif"
+python infer_light_senglean.py --checkpoint_g "C:\Users\vsriniva\OneDrive\Forestry_Github_Code\UNB-GGE\SuperResolution\LightSenGLEAN\weights\gens_light_sen_glean.pt" --checkpoint_d "C:\Users\vsriniva\OneDrive\Forestry_Github_Code\UNB-GGE\SuperResolution\LightSenGLEAN\weights\discs_all.pt" --do_TA --data_path "C:\SceneSharp\UNB-GGE\SuperResolution\Ayush_Outputs_Fredericton\AOI2\Fred_AOI2_B2B3B4B8B5B6B7B8a_Orig.tif"
+
+
+
+## ------------------------- Commands from README -----------------------------
+
+
+# RefGLEAN
+python evals_glean.py --checkpoint_g "C:\Users\vsriniva\OneDrive\Forestry_Github_Code\UNB-GGE\SuperResolution\RefGLEAN\weights\gens_glean.pt" --checkpoint_d "C:\Users\vsriniva\OneDrive\Forestry_Github_Code\UNB-GGE\SuperResolution\RefGLEAN\weights\discs_20m.pt" --checkpoint_rgb "C:\Users\vsriniva\OneDrive\Forestry_Github_Code\UNB-GGE\SuperResolution\RefGLEAN\weights\gens_esrgan.pt" --batch 4 --evals --do_TA --nepoch 150 --data_path "C:\SceneSharp\UNB-GGE\SuperResolution\Ayush_Outputs_Fredericton\AOI1\Fred_AOI1_B2B3B4B8B5B6B7B8a_Orig.tif"
+
+# LightRefGLEAN
+python eval_light_glean.py --checkpoint_g ./weights/gens_light_glean.pt --checkpoint_d ./weights/discs_20m.pt --batch 4 --evals --do_TA --nepoch 150 --data_path "C:\SceneSharp\UNB-GGE\SuperResolution\Ayush_Outputs_Fredericton\AOI1\Fred_AOI1_B2B3B4B8B5B6B7B8a_Orig.tif"
+
+# SenGLEAN
+python eval_glean_all.py --checkpoint_g ./weights/gens_sen_glean.pt --checkpoint_d ./weights/discs_all.pt --batch 4 --evals --do_TA --nepoch 150 --data_path "C:\SceneSharp\UNB-GGE\SuperResolution\Ayush_Outputs_Fredericton\AOI1\Fred_AOI1_B2B3B4B8B5B6B7B8a_Orig.tif"
