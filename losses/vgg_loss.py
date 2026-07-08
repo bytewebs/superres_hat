@@ -117,19 +117,23 @@ class ContentLoss(torch.nn.Module):
              feature_normalize_mean, feature_normalize_std) = args[:8]
             self._mode = "nodes"
 
-            # Define the feature extraction model
-            model = _FeatureExtractor(net_cfg_name, batch_norm, num_classes)
-            # Load the pre-trained model
+            # Load the pre-trained model. Compute nodes have no internet, so when
+            # model_weights_path is set (via SENHAT_VGG19_PATH on HPC) load from
+            # the local .pth file instead of downloading from pytorch.org.
             if model_weights_path is None:
                 model = models.vgg19(weights=models.VGG19_Weights.IMAGENET1K_V1)
-            elif model_weights_path is not None and os.path.exists(model_weights_path):
-                checkpoint = torch.load(model_weights_path, map_location=lambda storage, loc: storage)
-                if "state_dict" in checkpoint.keys():
+            elif os.path.exists(model_weights_path):
+                model = models.vgg19(weights=None)
+                checkpoint = torch.load(model_weights_path, map_location='cpu')
+                if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
                     model.load_state_dict(checkpoint["state_dict"])
                 else:
                     model.load_state_dict(checkpoint)
             else:
-                raise FileNotFoundError("Model weight file not found")
+                raise FileNotFoundError(
+                    f"VGG19 weights not found at {model_weights_path!r}. "
+                    "Compute nodes cannot download weights; pre-stage the file on "
+                    "/scratch and set SENHAT_VGG19_PATH (see SenGLEAN/Training/train.sh).")
 
             self.feature_extractor = create_feature_extractor(model, feature_nodes)
             self.feature_extractor_nodes = feature_nodes
@@ -142,15 +146,18 @@ class ContentLoss(torch.nn.Module):
             self._mode = "blocks"
 
             if model_weights_path is None:
-                model = models.vgg19(pretrained=True)
-            elif model_weights_path is not None and os.path.exists(model_weights_path):
-                checkpoint = torch.load(model_weights_path, map_location=lambda storage, loc: storage)
-                if "state_dict" in checkpoint.keys():
+                model = models.vgg19(weights=models.VGG19_Weights.IMAGENET1K_V1)
+            elif os.path.exists(model_weights_path):
+                model = models.vgg19(weights=None)
+                checkpoint = torch.load(model_weights_path, map_location='cpu')
+                if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
                     model.load_state_dict(checkpoint["state_dict"])
                 else:
                     model.load_state_dict(checkpoint)
             else:
-                raise FileNotFoundError("Model weight file not found")
+                raise FileNotFoundError(
+                    f"VGG19 weights not found at {model_weights_path!r}. "
+                    "Set SENHAT_VGG19_PATH to a pre-staged local file.")
 
             blocks = []
             blocks.append(model.features[:2].eval())

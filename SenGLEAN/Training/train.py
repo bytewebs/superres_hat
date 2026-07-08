@@ -161,7 +161,7 @@ def train(args, netG, netD):
     # spectral_loss = losses.SpectralLossNocorr([mtf_h], 0, np.array(I_VE_np[0].shape), s.ratio, device).to(device)
     spectral_loss = nn.L1Loss().to(device)
     # spectral_loss = nn.HuberLoss().to(device)
-    feature_criterion = ContentLoss("vgg19", False, 1000, None, config.TRAIN.vgg_features, config.TRAIN.vgg_weights, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]).to(device)
+    feature_criterion = ContentLoss("vgg19", False, 1000, config.TRAIN.vgg_weights_path, config.TRAIN.vgg_features, config.TRAIN.vgg_weights, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]).to(device)
     tv_loss = losses.TVLoss()
     cri_artifacts = nn.L1Loss()
     ndvi_loss = nn.L1Loss()

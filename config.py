@@ -29,6 +29,9 @@ config.TRAIN.lr_decay = 0.1
 config.TRAIN.decay_every = int(config.TRAIN.n_epoch / 2)
 config.TRAIN.vgg_features = ['features.2', 'features.7', 'features.16', 'features.25', 'features.34']
 config.TRAIN.vgg_weights = [0.1, 0.1, 0.5, 1, 1]
+# Pre-staged VGG19 ImageNet weights (required on HPC compute nodes; no internet).
+# Set SENHAT_VGG19_PATH in train.sh, or leave None for local dev (auto-download).
+config.TRAIN.vgg_weights_path = os.environ.get('SENHAT_VGG19_PATH', None)
 
 ## train set location
 config.TRAIN.hr_img_path = '../Geoeye/pan/'
