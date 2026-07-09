@@ -34,11 +34,13 @@ export SENHAT_SAVE_DIR="${SCRATCH_SAVE}"
 export SENHAT_VGG19_PATH="${SCRATCH_VGG}"
 
 # ---------------------------------------------------------------------------
-# Modules + virtualenv (adjust versions to your Narval setup)
+# Modules + virtualenv (STRICT COMBINATION for Narval OpenCV compatibility)
 # ---------------------------------------------------------------------------
-module load python/3.10
-module load cuda/12.2
-module load gcc/12.3
+# Clear out any clashing modules just in case
+module purge
+# Force the strict combination of modules (order matters!)
+module load StdEnv/2023 gcc opencv python/3.11 cuda/12.2
+
 source "${SCRATCH_BASE}/venv/bin/activate"
 
 # Repo root (directory containing config.py, networks/, datasets/, etc.)
@@ -51,7 +53,8 @@ if [[ ! -f "${SCRATCH_VGG}" ]]; then
   echo "ERROR: VGG19 weights not found at ${SCRATCH_VGG}"
   echo ""
   echo "Run ONCE on a Narval LOGIN node (not a compute node):"
-  echo "  module load python/3.11 cuda/12.2"
+  echo "  module purge"
+  echo "  module load StdEnv/2023 gcc opencv python/3.11 cuda/12.2"
   echo "  source ${SCRATCH_BASE}/venv/bin/activate"
   echo "  mkdir -p ${SCRATCH_BASE}/models"
   echo "  python -c \"from torchvision.models import vgg19, VGG19_Weights; vgg19(weights=VGG19_Weights.IMAGENET1K_V1)\""
