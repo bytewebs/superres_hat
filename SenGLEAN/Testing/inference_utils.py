@@ -333,17 +333,46 @@ def generate_raster_glean(file_name, chpt_rgb, chpt, raster_file='../sentinel_cl
     ds = None
 
 
+def _load_generator_weights(netG, chpt, device):
+    """Load a checkpoint saved with or without DataParallel ``module.`` prefixes."""
+    state = torch.load(chpt, map_location=device)
+    if isinstance(state, dict) and 'netG' in state:
+        state = state['netG']  # consolidated resume checkpoint
+    model_keys = set(netG.state_dict().keys())
+    ckpt_keys = set(state.keys())
+    if any(k.startswith('module.') for k in ckpt_keys) and not any(k.startswith('module.') for k in model_keys):
+        state = {k.replace('module.', '', 1): v for k, v in state.items()}
+    elif not any(k.startswith('module.') for k in ckpt_keys) and any(k.startswith('module.') for k in model_keys):
+        state = {'module.' + k: v for k, v in state.items()}
+    missing, unexpected = netG.load_state_dict(state, strict=False)
+    if missing:
+        print(f'[warn] missing keys: {len(missing)} (showing up to 5): {list(missing)[:5]}')
+    if unexpected:
+        print(f'[warn] unexpected keys: {len(unexpected)} (showing up to 5): {list(unexpected)[:5]}')
+    return netG
+
+
 def generate_raster_senglean(file_name, chpt, raster_file='../sentinel_clip.tif', scale=4, mscale=4, pad=5, model='senglean'):
     s = Sensor('S2')
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-    if model=='senglean':
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if model == 'senhat':
+        from networks.senhat import SenHAT
+        from config import config as _cfg
+        netG = SenHAT(64, 256, 4, 64, num_rrdbs=_cfg.NETWORK.NUM_RRDB, rgb_channels=4,
+                      hat_variant=_cfg.NETWORK.HAT_VARIANT).to(device)
+    elif model=='senglean':
         from networks.glean import SenGLEANStyleGANv2
         netG = SenGLEANStyleGANv2(64, 256, 4, 64, 23, rgb_channels=4).to(device)
     elif model=='light_senglean':
         from networks.glean import LightSenGLEANStyleGANv2
         netG = LightSenGLEANStyleGANv2(64, 256, 4, 64, 23, rgb_channels=4).to(device)
-    netG = nn.DataParallel(netG, device_ids=[1, 0, 2, 3])
-    netG.load_state_dict(torch.load(chpt))
+    else:
+        raise ValueError(f'Unknown model={model!r}; expected senhat | senglean | light_senglean')
+    # Single-GPU by default (Narval A100 jobs). Multi-GPU only if available.
+    if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        netG = nn.DataParallel(netG)
+    netG = _load_generator_weights(netG, chpt, device)
+    netG.eval()
 
     ds = gdal.Open(raster_file)
     arr = ds.ReadAsArray()

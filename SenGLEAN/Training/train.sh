@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=senhat-fidelity
+#SBATCH --job-name=senhat-phase2
 #SBATCH --account=def-rkmishra-ab
 #SBATCH --gres=gpu:a100:1
 #SBATCH --cpus-per-task=8
@@ -29,8 +29,9 @@ STAGE_VALID="${SLURM_TMPDIR}/sentinel_test"
 # ---------------------------------------------------------------------------
 export SENHAT_TRAIN_DATA="${STAGE_TRAIN}"
 export SENHAT_VALID_DATA="${STAGE_VALID}"
-export SENHAT_CHECKPOINT_DIR="${SCRATCH_CKPT}"
-export SENHAT_SAVE_DIR="${SCRATCH_SAVE}"
+# Trailing slash is required: train.py concatenates paths as ${dir}gens_7_*.pt
+export SENHAT_CHECKPOINT_DIR="${SCRATCH_CKPT}/"
+export SENHAT_SAVE_DIR="${SCRATCH_SAVE}/"
 export SENHAT_VGG19_PATH="${SCRATCH_VGG}"
 
 # ---------------------------------------------------------------------------

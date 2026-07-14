@@ -466,6 +466,11 @@ if __name__ == '__main__':
     # $SLURM_TMPDIR via SENHAT_TRAIN_DATA / SENHAT_VALID_DATA (see config.py).
     save_dir = os.environ.get('SENHAT_SAVE_DIR', '../srgan_samples_sent_glean_all/')
     checkpoint_dir = os.environ.get('SENHAT_CHECKPOINT_DIR', '../weights/')
+    # Ensure trailing slash so f'{checkpoint_dir}gens_...' does not become weightsgens_...
+    if not checkpoint_dir.endswith(os.sep):
+        checkpoint_dir = checkpoint_dir + os.sep
+    if not save_dir.endswith(os.sep):
+        save_dir = save_dir + os.sep
     os.makedirs(checkpoint_dir, exist_ok=True)
     os.makedirs(save_dir, exist_ok=True)
     print(f"train data: {config.TRAIN.data_path}")
