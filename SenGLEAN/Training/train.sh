@@ -96,11 +96,21 @@ echo "[stage] valid files: $(find "${STAGE_VALID}" -name '*.pt' | wc -l)"
 # python sanity_check_senhat.py --variant small --rrdbs 23 --batch 2
 
 # ---------------------------------------------------------------------------
-# Train (fidelity-only by default; pass --enable_gan later for GAN stage)
-# ---------------------------------------------------------------------------
+# Train. Phase 2 (--enable_gan) needs more VRAM (G + D + MS-SSIM); default batch 4.
+# Override with e.g. sbatch train.sh --resume --checkpoint ... --enable_gan --batch 2
 cd "${REPO_ROOT}/SenGLEAN/Training"
+
+# If the user already passed --batch in "$@", do not force another value.
+BATCH_ARGS=(--batch 4)
+for a in "$@"; do
+  if [[ "$a" == "--batch" || "$a" == --batch=* ]]; then
+    BATCH_ARGS=()
+    break
+  fi
+done
+
 python train.py \
-    --batch 8 \
+    "${BATCH_ARGS[@]}" \
     "$@"
 
 echo "Job finished at $(date)"

@@ -306,7 +306,9 @@ def train(args, netG, netD):
             ms_up = ms_up.to(device)
             
             ms_fake = netG(ms, ms_rgb_up)
-            ms_fake_ema = ema_netG(ms, ms_rgb_up)
+            # EMA is only used for LDL weights — never backprop through it.
+            with torch.no_grad():
+                ms_fake_ema = ema_netG(ms, ms_rgb_up)
 
             if not fidelity_only:
                 D_real = netD(ven_up)
