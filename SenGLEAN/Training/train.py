@@ -97,6 +97,22 @@ def test_single(data, net_g, net_d, iters):
     return metrics, metrics_bi
 
 
+def _atomic_torch_save(obj, path):
+    """Write to a temp file then rename, so a killed job cannot leave a 0-byte .pt."""
+    path = os.path.abspath(path)
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    tmp = path + f'.tmp.{os.getpid()}'
+    try:
+        torch.save(obj, tmp)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+
+
 def save_resume_checkpoint(path, epoch, iters, netG, ema_netG, optimizerG, schedulerG,
                            netD=None, optimizerD=None, schedulerD=None):
     """Consolidated, SenHAT-compatible resume checkpoint.
@@ -104,6 +120,7 @@ def save_resume_checkpoint(path, epoch, iters, netG, ema_netG, optimizerG, sched
     Stores everything needed to continue training bit-for-bit: generator weights,
     EMA generator state, optimizer/scheduler state, and the epoch/iteration counters.
     Discriminator artifacts are included when present (unused in the fidelity stage).
+    Uses an atomic write so walltime kills cannot truncate the previous good file.
     """
     ckpt = {
         'epoch': epoch,
@@ -119,33 +136,90 @@ def save_resume_checkpoint(path, epoch, iters, netG, ema_netG, optimizerG, sched
         ckpt['optimizerD'] = optimizerD.state_dict()
     if schedulerD is not None:
         ckpt['schedulerD'] = schedulerD.state_dict()
-    torch.save(ckpt, path)
+    _atomic_torch_save(ckpt, path)
+
+
+def _strip_module_prefix(state, model):
+    """Align DataParallel ``module.`` prefixes between checkpoint and model."""
+    model_has = any(k.startswith('module.') for k in model.state_dict())
+    ckpt_has = any(k.startswith('module.') for k in state)
+    if ckpt_has and not model_has:
+        return {k.replace('module.', '', 1): v for k, v in state.items()}
+    if (not ckpt_has) and model_has:
+        return {'module.' + k: v for k, v in state.items()}
+    return state
 
 
 def load_resume_checkpoint(path, netG, ema_netG, optimizerG, schedulerG,
                            netD=None, optimizerD=None, schedulerD=None, device='cpu'):
-    """Restore a consolidated checkpoint written by ``save_resume_checkpoint``.
+    """Restore a consolidated resume checkpoint OR a plain gens_*.pt state_dict.
 
-    Returns ``(start_epoch, iters)`` where ``start_epoch`` is the epoch to resume
-    at (i.e. the next one after the last completed epoch).
+    Returns ``(start_epoch, iters)`` where ``start_epoch`` is the next epoch to run.
     """
+    if not os.path.isfile(path) or os.path.getsize(path) < 1024:
+        raise RuntimeError(
+            f'Checkpoint is missing or corrupt (empty/tiny file): {path} '
+            f'({os.path.getsize(path) if os.path.isfile(path) else "missing"} bytes). '
+            'Use gens_7_389.pt instead, or restore a non-empty resume_7.pt backup.')
+
     ckpt = torch.load(path, map_location=torch.device(device))
-    netG.load_state_dict(ckpt['netG'])
-    if ema_netG is not None and 'ema_netG' in ckpt:
-        ema_netG.load_state_dict(ckpt['ema_netG'])
-    if 'optimizerG' in ckpt:
-        optimizerG.load_state_dict(ckpt['optimizerG'])
-    if schedulerG is not None and 'schedulerG' in ckpt:
-        schedulerG.load_state_dict(ckpt['schedulerG'])
-    if netD is not None and 'netD' in ckpt:
-        netD.load_state_dict(ckpt['netD'])
-    if optimizerD is not None and 'optimizerD' in ckpt:
-        optimizerD.load_state_dict(ckpt['optimizerD'])
-    if schedulerD is not None and 'schedulerD' in ckpt:
-        schedulerD.load_state_dict(ckpt['schedulerD'])
-    start_epoch = int(ckpt.get('epoch', -1)) + 1
-    iters = int(ckpt.get('iters', 0))
-    return start_epoch, iters
+
+    # Case A: consolidated resume written by save_resume_checkpoint
+    if isinstance(ckpt, dict) and 'netG' in ckpt:
+        netG.load_state_dict(_strip_module_prefix(ckpt['netG'], netG))
+        if ema_netG is not None and 'ema_netG' in ckpt:
+            ema_netG.load_state_dict(ckpt['ema_netG'])
+            # after loading EMA, also sync if shapes match; AveragedModel wraps netG
+        if 'optimizerG' in ckpt:
+            try:
+                optimizerG.load_state_dict(ckpt['optimizerG'])
+            except ValueError as e:
+                print(f'[resume] optimizerG not restored ({e}); using fresh optimizer.')
+        if schedulerG is not None and 'schedulerG' in ckpt:
+            try:
+                schedulerG.load_state_dict(ckpt['schedulerG'])
+            except Exception as e:
+                print(f'[resume] schedulerG not restored ({e}); using fresh scheduler.')
+        if netD is not None and 'netD' in ckpt:
+            try:
+                netD.load_state_dict(_strip_module_prefix(ckpt['netD'], netD))
+            except Exception as e:
+                print(f'[resume] netD not restored ({e}); using random-init discriminator.')
+        if optimizerD is not None and 'optimizerD' in ckpt:
+            try:
+                optimizerD.load_state_dict(ckpt['optimizerD'])
+            except ValueError as e:
+                print(f'[resume] optimizerD not restored ({e}); using fresh optimizerD.')
+        if schedulerD is not None and 'schedulerD' in ckpt:
+            try:
+                schedulerD.load_state_dict(ckpt['schedulerD'])
+            except Exception as e:
+                print(f'[resume] schedulerD not restored ({e}).')
+        start_epoch = int(ckpt.get('epoch', -1)) + 1
+        iters = int(ckpt.get('iters', 0))
+        return start_epoch, iters
+
+    # Case B: plain generator weights (gens_7_{epoch}.pt)
+    if isinstance(ckpt, dict):
+        netG.load_state_dict(_strip_module_prefix(ckpt, netG))
+        # EMA was constructed before resume (random weights); sync it to the loaded G.
+        if ema_netG is not None:
+            with torch.no_grad():
+                for p_ema, p in zip(ema_netG.parameters(), netG.parameters()):
+                    p_ema.copy_(p)
+            if hasattr(ema_netG, 'n_averaged'):
+                ema_netG.n_averaged.zero_()
+        # Prefer epoch encoded in filename: gens_7_389.pt -> resume at 390
+        start_epoch = 0
+        import re
+        m = re.search(r'gens_7_(\d+)\.pt$', os.path.basename(path))
+        if m:
+            start_epoch = int(m.group(1)) + 1
+        print(f'[resume] loaded generator-only weights from {path}; '
+              f'optimizer/EMA/scheduler start fresh; start_epoch={start_epoch}.')
+        return start_epoch, 0
+
+    raise RuntimeError(f'Unrecognized checkpoint format at {path}')
 
 
 def train(args, netG, netD):
@@ -402,8 +476,8 @@ def train(args, netG, netD):
             
         if epoch%10 == 9:
             # Generator-only weights kept for eval/inference compatibility.
-            torch.save(netG.state_dict(), f'{checkpoint_dir}gens_7_{epoch}.pt')
-            torch.save(netD.state_dict(), f'{checkpoint_dir}discs_7_{epoch}.pt')
+            _atomic_torch_save(netG.state_dict(), f'{checkpoint_dir}gens_7_{epoch}.pt')
+            _atomic_torch_save(netD.state_dict(), f'{checkpoint_dir}discs_7_{epoch}.pt')
             # Consolidated, SenHAT-compatible resume checkpoint (rolling latest).
             save_resume_checkpoint(f'{checkpoint_dir}resume_7.pt', epoch, iters,
                                    netG, ema_netG, optimizerG, schedulerG,
