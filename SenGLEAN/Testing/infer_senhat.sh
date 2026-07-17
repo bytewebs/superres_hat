@@ -19,9 +19,17 @@ S2_TIF="${SCRATCH_BASE}/sentinel2_hatms_test.tif"
 OUT_TIF="${SCRATCH_BASE}/samples/senhat_659_enhanced.tif"
 # ------------------------------
 
-module load python/3.11
+module purge
+
+module load StdEnv/2023
+module load gcc/12.3
 module load cuda/12.2
+module load python/3.11
+module load opencv/4.13.0
+
 source "${SCRATCH_BASE}/venv/bin/activate"
+
+python -c "import cv2; print('OpenCV:', cv2.__version__)"
 
 mkdir -p "${REPO_ROOT}/SenGLEAN/Training/logs" "${SCRATCH_BASE}/samples"
 cd "${REPO_ROOT}"
